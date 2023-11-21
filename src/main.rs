@@ -24,11 +24,14 @@ use rocket::State;
 const DEBUG_INFO_PATH: &str = "/usr/lib/debug";
 const DEBUG_INFO_BUILD_ID_PATH: &str = "/usr/lib/debug/.build-id/";
 const BUILD_ID_ELF_PREFIX: [u8; 8] = [0x03, 0x0, 0x0, 0x0, 0x47, 0x4e, 0x55, 0x0];
+const BUILD_CHARS: usize = 20;
+
+type BuildId = [u8; BUILD_CHARS];
 
 #[derive(Debug)]
 enum RPMKind {
     Binary,
-    DebugInfo { build_ids: HashMap<String, String> },
+    DebugInfo { build_ids: HashMap<BuildId, String> },
     DebugSource,
 }
 
@@ -48,14 +51,14 @@ struct DebugInfoRPM {
     binary_rpm_path: Option<String>,
     source_rpm: Option<String>,
 
-    build_id_to_path: HashMap<String, String>,
+    build_id_to_path: HashMap<BuildId, String>,
 }
 
 struct Server {
     root_path: String,
     debug_info_rpms: Vec<Arc<DebugInfoRPM>>,
 
-    build_ids: HashMap<String, Arc<DebugInfoRPM>>,
+    build_ids: HashMap<BuildId, Arc<DebugInfoRPM>>,
 }
 
 impl Server {
@@ -144,8 +147,8 @@ impl Server {
         }
     }
 
-    fn analyze_file(&self, path: &str) -> anyhow::Result<RPMFile> {
-        let rpm_file = std::fs::File::open(path)?;
+    fn analyze_file(&self, rpm_path: &str) -> anyhow::Result<RPMFile> {
+        let rpm_file = std::fs::File::open(rpm_path)?;
         let mut buf_reader = std::io::BufReader::new(rpm_file);
         let header =
             rpm::PackageMetadata::parse(&mut buf_reader).or(Err(anyhow!("RPM parsing failed")))?;
@@ -164,7 +167,7 @@ impl Server {
             .get_arch()
             .or(Err(anyhow!("get RPM arch failed")))?
             .to_string();
-        let path = path.to_string();
+        let rpm_path = rpm_path.to_string();
 
         let mut build_ids = HashMap::new();
 
@@ -192,20 +195,27 @@ impl Server {
                             .to_str()
                             .context("valid path expected")?,
                     );
-
-                    let target = path
-                        .parent()
-                        .context("filename must have a parent")?
-                        .join(file_entry.linkto.clone());
-                    build_ids.insert(
-                        build_id,
-                        target
-                            .as_path()
-                            .absolutize()?
-                            .to_str()
-                            .context("symlink target path must be valid")?
-                            .to_string(),
-                    );
+                    let build_id = self.parse_build_id(&build_id);
+                    match build_id {
+                        Ok(build_id) => {
+                            let target = path
+                                .parent()
+                                .context("filename must have a parent")?
+                                .join(file_entry.linkto.clone());
+                            build_ids.insert(
+                                build_id,
+                                target
+                                    .as_path()
+                                    .absolutize()?
+                                    .to_str()
+                                    .context("symlink target path must be valid")?
+                                    .to_string(),
+                            );
+                        }
+                        Err(error) => {
+                            println!("{rpm_path} {path:?} {error}");
+                        }
+                    }
                 } else if path
                     .parent()
                     .is_some_and(|p| p.file_name().is_some_and(|n| n == ".dwz"))
@@ -216,7 +226,7 @@ impl Server {
         }
 
         if contains_dwz {
-            if let Some((build_id, path)) = self.get_build_id_for_dwz(&path) {
+            if let Some((build_id, path)) = self.get_build_id_for_dwz(&rpm_path) {
                 build_ids.insert(build_id, path);
             }
         }
@@ -232,7 +242,7 @@ impl Server {
             arch,
             source_rpm,
             name: canonical_name,
-            path,
+            path: rpm_path,
             kind,
         })
     }
@@ -279,13 +289,13 @@ impl Server {
         None
     }
 
-    fn get_build_id_for_dwz(&self, file: &str) -> Option<(String, String)> {
+    fn get_build_id_for_dwz(&self, file: &str) -> Option<(BuildId, String)> {
         if let Some((mut stream, name)) =
             self.get_rpm_file_stream(file, |name| name.contains("usr/lib/debug/.dwz/"))
         {
             let mut data = vec![0; 256];
             let _ = stream.read_exact(&mut data);
-            let mut heystack = &data[..];
+            let mut heystack = data.as_slice();
             // TODO: proper iteration space
             for _ in 0..128 {
                 if heystack.starts_with(&BUILD_ID_ELF_PREFIX) {
@@ -295,7 +305,10 @@ impl Server {
                         .take(20)
                         .copied()
                         .collect();
-                    return Some((hex::encode(build_id), name));
+                    let build_id = BuildId::try_from(build_id);
+                    if let Ok(build_id) = build_id {
+                        return Some((build_id, name));
+                    }
                 } else {
                     heystack = &heystack[1..];
                 }
@@ -315,6 +328,18 @@ impl Server {
             None
         }
     }
+
+    fn parse_build_id(&self, id: &str) -> anyhow::Result<BuildId> {
+        let array = hex::decode(id)?;
+        if array.len() != BUILD_CHARS {
+            Err(anyhow!(
+                "Invalid build-id length: {}, expected {BUILD_CHARS}",
+                array.len()
+            ))
+        } else {
+            Ok(BuildId::try_from(array.as_slice())?)
+        }
+    }
 }
 
 #[get("/")]
@@ -324,11 +349,13 @@ fn index() -> &'static str {
 
 #[get("/buildid/<build_id>/debuginfo")]
 fn debuginfo(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
-    if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
-        return state.read_rpm_file(
-            &debug_info_rpm.rpm_path,
-            &debug_info_rpm.build_id_to_path[&build_id],
-        );
+    if let Ok(build_id) = state.parse_build_id(&build_id) {
+        if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
+            return state.read_rpm_file(
+                &debug_info_rpm.rpm_path,
+                &debug_info_rpm.build_id_to_path[&build_id],
+            );
+        }
     }
 
     None
@@ -336,16 +363,18 @@ fn debuginfo(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
 
 #[get("/buildid/<build_id>/executable")]
 fn executable(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
-    if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
-        if let Some(filename) = debug_info_rpm.build_id_to_path.get(&build_id) {
-            let filename = filename
-                .strip_suffix(".debug")
-                .unwrap()
-                .strip_prefix(DEBUG_INFO_PATH)
-                .unwrap()
-                .to_string();
-            if let Some(binary_rpm_path) = &debug_info_rpm.binary_rpm_path {
-                return state.read_rpm_file(&binary_rpm_path, &filename);
+    if let Ok(build_id) = state.parse_build_id(&build_id) {
+        if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
+            if let Some(filename) = debug_info_rpm.build_id_to_path.get(&build_id) {
+                let filename = filename
+                    .strip_suffix(".debug")
+                    .unwrap()
+                    .strip_prefix(DEBUG_INFO_PATH)
+                    .unwrap()
+                    .to_string();
+                if let Some(binary_rpm_path) = &debug_info_rpm.binary_rpm_path {
+                    return state.read_rpm_file(&binary_rpm_path, &filename);
+                }
             }
         }
     }
@@ -355,12 +384,14 @@ fn executable(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
 
 #[get("/buildid/<build_id>/source/<source_path..>")]
 fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Option<Vec<u8>> {
-    if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
-        if let Some(source_rpm_path) = &debug_info_rpm.source_rpm {
-            let mut filename = source_path.to_str().unwrap().to_string();
-            // TODO: fix me
-            filename.insert(0, '/');
-            return state.read_rpm_file(&source_rpm_path, &filename);
+    if let Ok(build_id) = state.parse_build_id(&build_id) {
+        if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
+            if let Some(source_rpm_path) = &debug_info_rpm.source_rpm {
+                let mut filename = source_path.to_str().unwrap().to_string();
+                // TODO: fix me
+                filename.insert(0, '/');
+                return state.read_rpm_file(&source_rpm_path, &filename);
+            }
         }
     }
 
@@ -378,7 +409,9 @@ fn rocket() -> _ {
     server.walk();
 
     // trim heap allocation after we parse all the RPM files
-    unsafe { libc::malloc_trim(0); }
+    unsafe {
+        libc::malloc_trim(0);
+    }
 
     info!(
         "parsing took: {:.2} s",
