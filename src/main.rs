@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use cpio::NewcReader;
+use env_logger::Env;
 use log::info;
 use path_absolutize::*;
 use rayon::prelude::*;
@@ -337,7 +338,7 @@ fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Opti
 
 #[launch]
 fn rocket() -> _ {
-    env_logger::builder()
+    env_logger::Builder::from_env(Env::default().default_filter_or("info"))
         .format_timestamp(Some(env_logger::TimestampPrecision::Millis))
         .init();
 
