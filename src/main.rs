@@ -22,6 +22,7 @@ extern crate rocket;
 use rocket::State;
 
 const DEBUG_INFO_PATH: &str = "/usr/lib/debug";
+const DWZ_DEBUG_INFO_PATH: &str = "/usr/lib/debug/.dwz/";
 const DEBUG_INFO_BUILD_ID_PATH: &str = "/usr/lib/debug/.build-id/";
 const BUILD_ID_ELF_PREFIX: [u8; 8] = [0x03, 0x0, 0x0, 0x0, 0x47, 0x4e, 0x55, 0x0];
 const BUILD_CHARS: usize = 20;
@@ -216,10 +217,7 @@ impl Server {
                             println!("{rpm_path} {path:?} {error}");
                         }
                     }
-                } else if path
-                    .parent()
-                    .is_some_and(|p| p.file_name().is_some_and(|n| n == ".dwz"))
-                {
+                } else if path.starts_with(DWZ_DEBUG_INFO_PATH) {
                     contains_dwz = true;
                 }
             }
@@ -291,7 +289,7 @@ impl Server {
 
     fn get_build_id_for_dwz(&self, file: &str) -> Option<(BuildId, String)> {
         if let Some((mut stream, name)) =
-            self.get_rpm_file_stream(file, |name| name.contains("usr/lib/debug/.dwz/"))
+            self.get_rpm_file_stream(file, |name| name.starts_with(DWZ_DEBUG_INFO_PATH))
         {
             let mut data = vec![0; 256];
             let _ = stream.read_exact(&mut data);
@@ -323,6 +321,7 @@ impl Server {
     fn read_rpm_file(&self, rpm_file: &String, file: &String) -> Option<Vec<u8>> {
         info!("reading RPM file {rpm_file}");
         if let Some((mut stream, _)) = self.get_rpm_file_stream(rpm_file, |f| f == file) {
+            info!("found RPM file: {file}");
             let mut content = Vec::new();
             let _ = stream.read_to_end(&mut content);
             return Some(content);
