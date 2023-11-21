@@ -288,6 +288,12 @@ impl Server {
     }
 
     fn get_build_id_for_dwz(&self, file: &str) -> Option<(BuildId, String)> {
+        // For now, let's parse '.note.gnu.build-id' section without any ELF library.
+        // Luckily, the created .dwz files (e.g. /usr/lib/debug/.dwz/foo.x86_64) have only a limited
+        // number of ELF sections and the note is section is at the very beginning.
+        //
+        // See SHT_NOTE for a more detail specification. Our note contains "GNU\0" followed by the Build-Id.
+
         if let Some((mut stream, name)) =
             self.get_rpm_file_stream(file, |name| name.starts_with(DWZ_DEBUG_INFO_PATH))
         {
@@ -389,7 +395,7 @@ fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Opti
         if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
             if let Some(source_rpm_path) = &debug_info_rpm.source_rpm {
                 let mut filename = source_path.to_str().unwrap().to_string();
-                // TODO: fix me
+                // Prefix all paths with slash.
                 filename.insert(0, '/');
                 return state.read_rpm_file(&source_rpm_path, &filename);
             }
