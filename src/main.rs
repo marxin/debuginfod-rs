@@ -324,10 +324,6 @@ fn rocket() -> _ {
     println!("Registered {} build-ids", server.build_ids.len());
     println!("For {} DebugInfoRPM entries", server.debug_info_rpms.len());
 
-    for debug_info_rpm in server.debug_info_rpms.iter().take(10) {
-        println!("{debug_info_rpm:?}");
-    }
-
     rocket::build()
         .manage(server)
         .mount("/", routes![index, debuginfo, source])
