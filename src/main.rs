@@ -117,37 +117,33 @@ impl Server {
         let is_debug_info_rpm = name.ends_with("-debuginfo");
         let mut build_ids = HashMap::new();
 
-        // TODO: called `Result::unwrap()` on an `Err` value: TagNotFound("RPMTAG_FILEMODES")
-
         let mut contains_dwz = false;
-        if let Ok(entries) = header.get_file_entries() {
-            for file_entry in entries {
-                let path = file_entry.path;
-                if is_debug_info_rpm {
-                    if path.starts_with(DEBUG_INFO_PATH_PREFIX)
-                        && path.extension().is_some_and(|e| e == ".debug")
-                    {
-                        let mut build_id = String::from(
-                            path.parent()
-                                .unwrap()
-                                .file_name()
-                                .unwrap()
-                                .to_str()
-                                .unwrap(),
-                        );
-                        build_id.push_str(path.file_stem().unwrap().to_str().unwrap());
+        for file_entry in header.get_file_entries().unwrap() {
+            let path = file_entry.path;
+            if is_debug_info_rpm {
+                if path.starts_with(DEBUG_INFO_PATH_PREFIX)
+                    && path.extension().is_some_and(|e| e == ".debug")
+                {
+                    let mut build_id = String::from(
+                        path.parent()
+                            .unwrap()
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap(),
+                    );
+                    build_id.push_str(path.file_stem().unwrap().to_str().unwrap());
 
-                        let target = path.parent().unwrap().join(file_entry.linkto.clone());
-                        build_ids.insert(
-                            build_id,
-                            String::from(target.as_path().absolutize().unwrap().to_str().unwrap()),
-                        );
-                    } else if path
-                        .parent()
-                        .is_some_and(|p| p.file_name().unwrap() == ".dwz")
-                    {
-                        contains_dwz = true;
-                    }
+                    let target = path.parent().unwrap().join(file_entry.linkto.clone());
+                    build_ids.insert(
+                        build_id,
+                        String::from(target.as_path().absolutize().unwrap().to_str().unwrap()),
+                    );
+                } else if path
+                    .parent()
+                    .is_some_and(|p| p.file_name().unwrap() == ".dwz")
+                {
+                    contains_dwz = true;
                 }
             }
         }
