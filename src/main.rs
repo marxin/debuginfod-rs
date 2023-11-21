@@ -34,7 +34,7 @@ fn debuginfo(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
 #[get("/buildid/<build_id>/executable")]
 fn executable(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
     if let Ok(build_id) = state.parse_build_id(&build_id) {
-        if let Some((binary_rpm_file, filename)) = state.get_binary_rpm_for_build_id(build_id) {
+        if let Some((binary_rpm_file, filename)) = state.get_binary_rpm_for_build_id(&build_id) {
             return state.read_rpm_file(&binary_rpm_file, &filename);
         }
     }
@@ -55,7 +55,7 @@ fn section(build_id: String, section_name: String, state: &State<Server>) -> Opt
                 return Some(data);
             } else {
                 if let Some((binary_rpm_file, filename)) =
-                    state.get_binary_rpm_for_build_id(build_id)
+                    state.get_binary_rpm_for_build_id(&build_id)
                 {
                     return state.read_rpm_file_section(&binary_rpm_file, &filename, &section_name);
                 }

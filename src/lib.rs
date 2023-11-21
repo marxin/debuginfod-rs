@@ -319,9 +319,9 @@ impl Server {
         None
     }
 
-    pub fn get_binary_rpm_for_build_id(&self, build_id: BuildId) -> Option<(String, String)> {
-        if let Some(debug_info_rpm) = self.build_ids.get(&build_id) {
-            if let Some(filename) = debug_info_rpm.build_id_to_path.get(&build_id) {
+    pub fn get_binary_rpm_for_build_id(&self, build_id: &BuildId) -> Option<(String, String)> {
+        if let Some(debug_info_rpm) = self.build_ids.get(build_id) {
+            if let Some(filename) = debug_info_rpm.build_id_to_path.get(build_id) {
                 let filename = filename
                     .strip_suffix(".debug")
                     .unwrap()
