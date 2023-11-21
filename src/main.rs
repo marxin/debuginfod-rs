@@ -74,7 +74,13 @@ impl Server {
             if entry.metadata().unwrap().is_file()
                 && entry.path().extension().is_some_and(|e| e == "rpm")
             {
-                files.push(String::from(entry.path().to_str().unwrap()));
+                let path = entry.path().to_str();
+                match path {
+                    Some(path) => {
+                        files.push(path.to_string());
+                    }
+                    None => warn!("invalid RPM file path {entry:?}"),
+                }
             }
         }
 
@@ -89,8 +95,9 @@ impl Server {
         let mut rpms = Vec::new();
 
         for item in tx.iter() {
-            if let Ok(rpm_file) = item {
-                rpms.push(rpm_file);
+            match item {
+                Ok(rpm_file) => rpms.push(rpm_file),
+                Err(error) => warn!("could not analyze RPM: {error}"),
             }
         }
 
@@ -255,7 +262,7 @@ impl Server {
             if entry.is_trailer() {
                 break;
             }
-            let mut name = String::from(entry.name());
+            let mut name = entry.name().to_string();
             if name.starts_with('.') {
                 name = String::from_iter(name.chars().skip(1));
             }
