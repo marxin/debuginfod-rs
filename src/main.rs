@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::Context;
 use cpio::NewcReader;
 use path_absolutize::*;
 use rayon::prelude::*;
@@ -133,7 +133,7 @@ impl Server {
         }
     }
 
-    fn analyze_file(&self, path: &str) -> Result<RPMFile> {
+    fn analyze_file(&self, path: &str) -> anyhow::Result<RPMFile> {
         let rpm_file = std::fs::File::open(path)?;
         let mut buf_reader = std::io::BufReader::new(rpm_file);
         // TODO: use ?
@@ -156,14 +156,14 @@ impl Server {
                 if path.starts_with(DEBUG_INFO_BUILD_ID_PATH)
                     && path.extension().is_some_and(|e| e == "debug")
                 {
-                    let mut build_id = String::from(
-                        path.parent()
-                            .unwrap()
-                            .file_name()
-                            .unwrap()
-                            .to_str()
-                            .unwrap(),
-                    );
+                    let mut build_id = path
+                        .parent()
+                        .context("parent must exist")?
+                        .file_name()
+                        .context("direct name must exist")?
+                        .to_str()
+                        .context("filename should be valid")?
+                        .to_string();
                     build_id.push_str(path.file_stem().unwrap().to_str().unwrap());
 
                     let target = path.parent().unwrap().join(file_entry.linkto.clone());
