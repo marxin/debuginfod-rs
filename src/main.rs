@@ -14,7 +14,7 @@ use debuginfod_rs::*;
 
 #[get("/")]
 fn index() -> &'static str {
-    "Hello, world!"
+    "Welcome to debuginfod-rs server!"
 }
 
 #[get("/buildid/<build_id>/debuginfo")]
