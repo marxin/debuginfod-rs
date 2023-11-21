@@ -2,12 +2,11 @@ use std::path::PathBuf;
 
 use env_logger::Env;
 use log::info;
-use rocket::time::Instant;
-
 extern crate log;
 
 #[macro_use]
 extern crate rocket;
+use rocket::time::Instant;
 use rocket::State;
 
 use debuginfod_rs::*;
@@ -53,12 +52,10 @@ fn section(build_id: String, section_name: String, state: &State<Server>) -> Opt
                 &section_name,
             ) {
                 return Some(data);
-            } else {
-                if let Some((binary_rpm_file, filename)) =
-                    state.get_binary_rpm_for_build_id(&build_id)
-                {
-                    return state.read_rpm_file_section(&binary_rpm_file, &filename, &section_name);
-                }
+            } else if let Some((binary_rpm_file, filename)) =
+                state.get_binary_rpm_for_build_id(&build_id)
+            {
+                return state.read_rpm_file_section(&binary_rpm_file, &filename, &section_name);
             }
         }
     }
@@ -74,7 +71,7 @@ fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Opti
                 let mut filename = source_path.to_str().unwrap().to_string();
                 // Prefix all paths with slash.
                 filename.insert(0, '/');
-                return state.read_rpm_file(&source_rpm_path, &filename);
+                return state.read_rpm_file(source_rpm_path, &filename);
             }
         }
     }

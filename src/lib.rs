@@ -11,7 +11,6 @@ use elf::ElfBytes;
 use log::{info, warn};
 use path_absolutize::*;
 use rayon::prelude::*;
-use rpm;
 use rpm::CompressionType;
 use walkdir::WalkDir;
 
@@ -126,17 +125,17 @@ impl Server {
                     rpm_path: rpm.path.clone(),
                     binary_rpm_path: binary_rpm_map
                         .get(&(&rpm.arch, &rpm.source_rpm, &rpm.name))
-                        .and_then(|r| Some(r.path.clone())),
+                        .map(|r| r.path.clone()),
                     source_rpm: source_rpm_map
                         .get(&(&rpm.arch, &rpm.source_rpm))
-                        .and_then(|r| Some(r.path.clone())),
+                        .map(|r| r.path.clone()),
                     build_id_to_path: build_ids.clone(),
                 });
 
                 self.debug_info_rpms.push(debug_info.clone());
                 // Construct the Server state build-id mapping to DebugInfoRPM entries.
                 for build_id in debug_info.build_id_to_path.keys() {
-                    self.build_ids.insert(build_id.clone(), debug_info.clone());
+                    self.build_ids.insert(*build_id, debug_info.clone());
                 }
             }
         }
@@ -343,7 +342,7 @@ impl Server {
             info!("found RPM file: {file}");
             let mut content = Vec::new();
             let _ = stream.read_to_end(&mut content);
-            return Some(content);
+            Some(content)
         } else {
             None
         }
@@ -351,17 +350,14 @@ impl Server {
 
     pub fn read_rpm_file_section(
         &self,
-        rpm_file: &String,
-        file: &String,
-        section: &String,
+        rpm_file: &str,
+        file: &str,
+        section: &str,
     ) -> Option<Vec<u8>> {
         if let Some(data) = self.read_rpm_file(rpm_file, file) {
             if let Ok(elf_file) = ElfBytes::<AnyEndian>::minimal_parse(data.as_slice()) {
                 if let Ok(section) = elf_file.section_header_by_name(section) {
-                    if section.is_none() {
-                        return None;
-                    }
-                    let section = section.unwrap();
+                    let section = section?;
                     if section.sh_type == SHT_NOBITS {
                         return None;
                     }
