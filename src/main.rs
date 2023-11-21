@@ -6,12 +6,15 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use cpio::NewcReader;
+use log::info;
 use path_absolutize::*;
 use rayon::prelude::*;
 use rocket::time::Instant;
 use rpm;
 use rpm::CompressionType;
 use walkdir::WalkDir;
+
+extern crate log;
 
 #[macro_use]
 extern crate rocket;
@@ -74,7 +77,7 @@ impl Server {
             }
         }
 
-        println!("Walking {} RPM files", files.len());
+        info!("walking {} RPM files", files.len());
 
         let (rx, tx) = channel();
 
@@ -271,7 +274,7 @@ impl Server {
     }
 
     fn read_rpm_file(&self, rpm_file: &String, file: &String) -> Option<Vec<u8>> {
-        println!("  reading RPM file {rpm_file}");
+        info!("reading RPM file {rpm_file}");
         if let Some((mut stream, _)) = self.get_rpm_file_stream(rpm_file, |f| f == file) {
             let mut content = Vec::new();
             let _ = stream.read_to_end(&mut content);
@@ -334,15 +337,17 @@ fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Opti
 
 #[launch]
 fn rocket() -> _ {
+    env_logger::init();
+
     let start = Instant::now();
     let mut server = Server::new("/home/marxin/Data");
     server.walk();
-    println!(
-        "Parsing took: {} s",
+    info!(
+        "parsing took: {:.2} s",
         (Instant::now() - start).as_seconds_f32()
     );
-    println!("Registered {} build-ids", server.build_ids.len());
-    println!("For {} DebugInfoRPM entries", server.debug_info_rpms.len());
+    info!("registered {} build-ids", server.build_ids.len());
+    info!("DebugInfo RPM entries: {}", server.debug_info_rpms.len());
 
     rocket::build()
         .manage(server)
