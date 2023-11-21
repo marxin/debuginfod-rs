@@ -1,16 +1,16 @@
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 
 use anyhow::Result;
 use cpio::NewcReader;
 use path_absolutize::*;
 use rayon::prelude::*;
 use rocket::figment::providers::Format;
-use rocket::response::status::NotFound;
 use rocket::time::Instant;
-use rocket::Response;
 use rpm;
 use rpm::CompressionType;
 use walkdir::WalkDir;
@@ -23,14 +23,8 @@ const ARCH_MAPPING: [&str; 2] = ["x86_64", "aarch64"];
 const DEBUG_INFO_PATH_PREFIX: &str = "/usr/lib/debug/.build-id/";
 const BUILD_ID_PREFIX: [u8; 8] = [0x03, 0x0, 0x0, 0x0, 0x47, 0x4e, 0x55, 0x0];
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct RPMSourceKey {
-    arch: usize,
-    source_rpm: String,
-}
-
 #[derive(Debug)]
-enum RPMContent {
+enum RPMKind {
     Binary,
     DebugInfo { build_ids: HashMap<String, String> },
     DebugSource,
@@ -38,26 +32,35 @@ enum RPMContent {
 
 #[derive(Debug)]
 struct RPMFile {
-    source: RPMSourceKey,
+    arch: String,
+    source_rpm: String,
+    name: String,
+
     path: String,
-    content: RPMContent,
+    kind: RPMKind,
+}
+
+#[derive(Debug)]
+struct DebugInfoRPM {
+    rpm_path: String,
+    binary_rpm_path: Option<String>,
+    source_rpm: Option<String>,
+
+    build_id_to_path: HashMap<String, String>,
 }
 
 struct Server {
     root_path: String,
-    binary_rpms: HashMap<RPMSourceKey, RPMFile>,
-    debug_info_rpms: HashMap<RPMSourceKey, RPMFile>,
-    debug_source_rpms: HashMap<RPMSourceKey, RPMFile>,
-    build_ids: HashMap<String, RPMSourceKey>,
+    debug_info_rpms: Vec<Arc<DebugInfoRPM>>,
+
+    build_ids: HashMap<String, Arc<DebugInfoRPM>>,
 }
 
 impl Server {
     fn new(root_folder: &str) -> Self {
         Server {
             root_path: String::from(root_folder),
-            binary_rpms: HashMap::new(),
-            debug_info_rpms: HashMap::new(),
-            debug_source_rpms: HashMap::new(),
+            debug_info_rpms: Vec::new(),
             build_ids: HashMap::new(),
         }
     }
@@ -73,7 +76,7 @@ impl Server {
             }
         }
 
-        println!("Indexing {} RPM files", files.len());
+        println!("Walking {} RPM files", files.len());
 
         let (rx, tx) = channel();
 
@@ -81,26 +84,53 @@ impl Server {
             let _ = rx.send(self.analyze_file(path));
         });
 
+        let mut rpms = Vec::new();
+
         for item in tx.iter() {
             if let Ok(rpm_file) = item {
-                let map = match rpm_file.content {
-                    RPMContent::Binary => &mut self.binary_rpms,
-                    RPMContent::DebugInfo { .. } => &mut self.debug_info_rpms,
-                    RPMContent::DebugSource => &mut self.debug_source_rpms,
-                };
-                map.insert(rpm_file.source.clone(), rpm_file);
-            } else {
-                todo!();
+                rpms.push(rpm_file);
             }
         }
 
-        // save all build-ids for the future look up
-        for (source_key, rpm) in &self.debug_info_rpms {
-            if let RPMContent::DebugInfo { build_ids } = &rpm.content {
-                for (build_id, _) in build_ids {
-                    // TODO: remove clonning
-                    self.build_ids.insert(build_id.clone(), source_key.clone());
-                }
+        /* First iterate the source RPM filies and create a map we can later use for construction
+        of the DebugInfoRPM entires. */
+        let mut source_rpm_map = HashMap::new();
+        for rpm in &rpms {
+            if let RPMKind::DebugSource = rpm.kind {
+                source_rpm_map.insert((&rpm.arch, &rpm.source_rpm), rpm);
+            }
+        }
+
+        /* Second iterate the binary RPM files and also create a map. We need to include canonical
+        package name in the map. */
+        let mut binary_rpm_map = HashMap::new();
+        for rpm in &rpms {
+            if let RPMKind::Binary = rpm.kind {
+                binary_rpm_map.insert((&rpm.arch, &rpm.source_rpm, &rpm.name), rpm);
+            }
+        }
+
+        /* Now we can construct DebugInfoRPM entries and find the corresponding Binary and DebugSource packages. */
+        for rpm in &rpms {
+            if let RPMKind::DebugInfo { build_ids } = &rpm.kind {
+                let debug_info = Arc::new(DebugInfoRPM {
+                    rpm_path: rpm.path.clone(),
+                    binary_rpm_path: binary_rpm_map
+                        .get(&(&rpm.arch, &rpm.source_rpm, &rpm.name))
+                        .and_then(|r| Some(r.path.clone())),
+                    source_rpm: source_rpm_map
+                        .get(&(&rpm.arch, &rpm.source_rpm))
+                        .and_then(|r| Some(r.path.clone())),
+                    build_id_to_path: build_ids.clone(),
+                });
+                self.debug_info_rpms.push(debug_info);
+            }
+        }
+
+        /* Construct the Server state build-id mapping to DebugInfoRPM entries. */
+        for rpm in &self.debug_info_rpms {
+            for build_id in rpm.build_id_to_path.keys() {
+                self.build_ids.insert(build_id.clone(), rpm.clone());
             }
         }
     }
@@ -112,15 +142,13 @@ impl Server {
         let header = rpm::PackageMetadata::parse(&mut buf_reader).unwrap();
 
         let name = header.get_name().unwrap();
+        let is_debug_info_rpm = name.ends_with("-debuginfo");
+        let canonical_name = name.strip_suffix("-debuginfo").unwrap_or(name).to_string();
+
         let source_rpm = String::from(header.get_source_rpm().unwrap());
-        let arch = header.get_arch().unwrap();
-        let source = RPMSourceKey {
-            arch: ARCH_MAPPING.iter().position(|&item| item == arch).unwrap(),
-            source_rpm,
-        };
+        let arch = header.get_arch().unwrap().to_string();
         let path = String::from(path);
 
-        let is_debug_info_rpm = name.ends_with("-debuginfo");
         let mut build_ids = HashMap::new();
 
         let mut contains_dwz = false;
@@ -160,17 +188,19 @@ impl Server {
             }
         }
 
-        let content = if is_debug_info_rpm {
-            RPMContent::DebugInfo { build_ids }
+        let kind = if is_debug_info_rpm {
+            RPMKind::DebugInfo { build_ids }
         } else if name.ends_with("-debugsource") {
-            RPMContent::DebugSource
+            RPMKind::DebugSource
         } else {
-            RPMContent::Binary
+            RPMKind::Binary
         };
         Ok(RPMFile {
-            source,
+            arch,
+            source_rpm,
+            name: canonical_name,
             path,
-            content,
+            kind,
         })
     }
 
@@ -261,11 +291,11 @@ fn index() -> &'static str {
 
 #[get("/buildid/<build_id>/debuginfo")]
 fn debuginfo(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
-    if let Some(source) = state.build_ids.get(&build_id) {
-        let debug_info_rpm = &state.debug_info_rpms[source];
-        if let RPMContent::DebugInfo { build_ids } = &debug_info_rpm.content {
-            return state.read_rpm_file(&debug_info_rpm.path, &build_ids[&build_id]);
-        }
+    if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
+        return state.read_rpm_file(
+            &debug_info_rpm.rpm_path,
+            &debug_info_rpm.build_id_to_path[&build_id],
+        );
     }
 
     None
@@ -273,10 +303,13 @@ fn debuginfo(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
 
 #[get("/buildid/<build_id>/source/<source_path..>")]
 fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Option<Vec<u8>> {
-    let source_path = format!("/{}", source_path.as_os_str().to_str().unwrap());
-    if let Some(source) = state.build_ids.get(&build_id) {
-        let source_info_rpm = &state.debug_source_rpms[source];
-        return state.read_rpm_file(&source_info_rpm.path, &source_path);
+    if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
+        if let Some(source_rpm_path) = &debug_info_rpm.source_rpm {
+            let mut filename = source_path.to_str().unwrap().to_string();
+            // TODO: fix me
+            filename.insert(0, '/');
+            return state.read_rpm_file(&source_rpm_path, &filename);
+        }
     }
 
     None
@@ -292,6 +325,11 @@ fn rocket() -> _ {
         (Instant::now() - start).as_seconds_f32()
     );
     println!("Registered {} build-ids", server.build_ids.len());
+    println!("For {} DebugInfoRPM entries", server.debug_info_rpms.len());
+
+    for debug_info_rpm in server.debug_info_rpms.iter().take(10) {
+        println!("{debug_info_rpm:?}");
+    }
 
     rocket::build()
         .manage(server)
