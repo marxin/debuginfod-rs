@@ -23,7 +23,7 @@ use rocket::State;
 
 const DEBUG_INFO_PATH: &str = "/usr/lib/debug";
 const DEBUG_INFO_BUILD_ID_PATH: &str = "/usr/lib/debug/.build-id/";
-const BUILD_ID_PREFIX: [u8; 8] = [0x03, 0x0, 0x0, 0x0, 0x47, 0x4e, 0x55, 0x0];
+const BUILD_ID_ELF_PREFIX: [u8; 8] = [0x03, 0x0, 0x0, 0x0, 0x47, 0x4e, 0x55, 0x0];
 
 #[derive(Debug)]
 enum RPMKind {
@@ -288,10 +288,10 @@ impl Server {
             let mut heystack = &data[..];
             // TODO: proper iteration space
             for _ in 0..128 {
-                if heystack.starts_with(&BUILD_ID_PREFIX) {
+                if heystack.starts_with(&BUILD_ID_ELF_PREFIX) {
                     let build_id: Vec<_> = heystack
                         .iter()
-                        .skip(BUILD_ID_PREFIX.len())
+                        .skip(BUILD_ID_ELF_PREFIX.len())
                         .take(20)
                         .copied()
                         .collect();
@@ -376,6 +376,10 @@ fn rocket() -> _ {
     let start = Instant::now();
     let mut server = Server::new("/home/marxin/Data");
     server.walk();
+
+    // trim heap allocation after we parse all the RPM files
+    unsafe { libc::malloc_trim(0); }
+
     info!(
         "parsing took: {:.2} s",
         (Instant::now() - start).as_seconds_f32()
