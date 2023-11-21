@@ -504,6 +504,7 @@ dependencies = [
  "anyhow",
  "bytesize",
  "cpio",
+ "hex",
  "path-absolutize",
  "rayon",
  "rocket",

@@ -1,11 +1,14 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::sync::mpsc::channel;
 
 use anyhow::Result;
 use path_absolutize::*;
 use rayon::prelude::*;
-use rocket::response::status::{self, NotFound};
+use rocket::response::status::NotFound;
+use rocket::time::Instant;
 use rpm;
+use rpm::CompressionType;
 use walkdir::WalkDir;
 
 #[macro_use]
@@ -14,6 +17,7 @@ use rocket::State;
 
 const ARCH_MAPPING: [&str; 1] = ["x86_64"];
 const DEBUG_INFO_PATH_PREFIX: &str = "/usr/lib/debug/.build-id/";
+const BUILD_ID_PREFIX: [u8; 8] = [0x03, 0x0, 0x0, 0x0, 0x47, 0x4e, 0x55, 0x0];
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct RPMSourceKey {
@@ -113,6 +117,7 @@ impl Server {
 
         // TODO: called `Result::unwrap()` on an `Err` value: TagNotFound("RPMTAG_FILEMODES")
 
+        let mut contains_dwz = false;
         if let Ok(entries) = header.get_file_entries() {
             for file_entry in entries {
                 let path = file_entry.path;
@@ -135,8 +140,19 @@ impl Server {
                             build_id,
                             String::from(target.as_path().absolutize().unwrap().to_str().unwrap()),
                         );
+                    } else if path
+                        .parent()
+                        .is_some_and(|p| p.file_name().unwrap() == ".dwz")
+                    {
+                        contains_dwz = true;
                     }
                 }
+            }
+        }
+
+        if contains_dwz {
+            if let Some((build_id, path)) = self.get_build_id_for_dwz(&path) {
+                build_ids.insert(build_id, path);
             }
         }
 
@@ -152,6 +168,57 @@ impl Server {
             path,
             content,
         })
+    }
+
+    fn get_build_id_for_dwz(&self, path: &str) -> Option<(String, String)> {
+        let rpm_file = std::fs::File::open(path).unwrap();
+
+        let mut buf_reader = std::io::BufReader::new(rpm_file);
+        // TODO: use ?
+        let header = rpm::PackageMetadata::parse(&mut buf_reader).unwrap();
+
+        let compressor = header.get_payload_compressor();
+        if compressor.is_err() || compressor.ok().unwrap() != CompressionType::Zstd {
+            // TODO: fix
+            return None;
+        }
+
+        let mut decoder = zstd::stream::Decoder::new(buf_reader).unwrap();
+
+        loop {
+            let mut archive = cpio::NewcReader::new(decoder).unwrap();
+            let entry = archive.entry();
+            if entry.is_trailer() {
+                break;
+            }
+            let name = String::from(entry.name());
+            let file_size = entry.file_size() as usize;
+
+            if name.contains("usr/lib/debug/.dwz/") && file_size > 0 {
+                let mut data = vec![0; 256];
+                let _ = archive.read_exact(&mut data);
+                let mut heystack = &data[..];
+                // TODO: proper iteration space
+                for _ in 0..128 {
+                    if heystack.starts_with(&BUILD_ID_PREFIX) {
+                        let build_id: Vec<_> = heystack
+                            .iter()
+                            .skip(BUILD_ID_PREFIX.len())
+                            .take(20)
+                            .copied()
+                            .collect();
+                        return Some((hex::encode(build_id), name));
+                    } else {
+                        heystack = &heystack[1..];
+                    }
+                }
+                break;
+            } else {
+                decoder = archive.finish().unwrap();
+            }
+        }
+
+        panic!()
     }
 }
 
@@ -171,8 +238,14 @@ fn debuginfo(build_id: String, state: &State<Server>) -> Result<String, NotFound
 
 #[launch]
 fn rocket() -> _ {
+    let start = Instant::now();
     let mut server = Server::new("/home/marxin/Data");
     server.walk();
+    println!(
+        "Parsing took: {} s",
+        (Instant::now() - start).as_seconds_f32()
+    );
+
     rocket::build()
         .manage(server)
         .mount("/", routes![index, debuginfo])
