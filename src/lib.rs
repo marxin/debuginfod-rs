@@ -244,7 +244,7 @@ impl Server {
     fn get_rpm_file_stream(
         &self,
         path: &str,
-        file_selector: impl Fn(&String) -> bool,
+        file_selector: impl Fn(&str) -> bool,
     ) -> anyhow::Result<(NewcReader<impl Read>, String)> {
         let rpm_file = std::fs::File::open(path).context("cannot open RPM file")?;
 
@@ -337,7 +337,7 @@ impl Server {
         None
     }
 
-    pub fn read_rpm_file(&self, rpm_file: &String, file: &String) -> Option<Vec<u8>> {
+    pub fn read_rpm_file(&self, rpm_file: &str, file: &str) -> Option<Vec<u8>> {
         info!("reading RPM file {rpm_file}");
         if let Ok((mut stream, _)) = self.get_rpm_file_stream(rpm_file, |f| f == file) {
             info!("found RPM file: {file}");
