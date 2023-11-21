@@ -337,7 +337,9 @@ fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Opti
 
 #[launch]
 fn rocket() -> _ {
-    env_logger::init();
+    env_logger::builder()
+        .format_timestamp(Some(env_logger::TimestampPrecision::Millis))
+        .init();
 
     let start = Instant::now();
     let mut server = Server::new("/home/marxin/Data");
