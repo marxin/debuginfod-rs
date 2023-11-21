@@ -4,8 +4,12 @@ use std::sync::mpsc::channel;
 use anyhow::Result;
 use path_absolutize::*;
 use rayon::prelude::*;
+use rocket::response::status::{self, NotFound};
 use rpm;
 use walkdir::WalkDir;
+
+#[macro_use] extern crate rocket;
+use rocket::State;
 
 const ARCH_MAPPING: [&str; 1] = ["x86_64"];
 const DEBUG_INFO_PATH_PREFIX: &str = "/usr/lib/debug/.build-id/";
@@ -149,28 +153,26 @@ impl Server {
     }
 }
 
-fn main() {
+#[get("/")]
+fn index() -> &'static str {
+    "Hello, world!"
+}
+
+#[get("/buildid/<build_id>/debuginfo")]
+fn debuginfo(build_id: String, state: &State<Server>) -> Result<String, NotFound<&str>> {
+    if let Some(path) = state.build_ids.get(&build_id) {
+        Ok(state.debug_info_rpms[path].path.clone())
+    } else {
+        Err(NotFound("The provided build-id is not found."))
+    }
+}
+
+
+#[launch]
+fn rocket() -> _ {
     let mut server = Server::new("/home/marxin/Data");
     server.walk();
-    println!("binaries: {}", server.binary_rpms.len());
-    println!("debuginfos: {}", server.debug_info_rpms.len());
-    println!("sources: {}", server.debug_source_rpms.len());
-    println!("build-ids: {}", server.build_ids.len());
-
-    const N: usize = 5;
-    for (_, rpm) in server.debug_info_rpms.iter().take(N) {
-        println!("{:?}", rpm);
-    }
-    println!();
-    for (_, rpm) in server.debug_source_rpms.iter().take(N) {
-        println!("{:?}", rpm);
-    }
-    println!();
-    for (_, rpm) in server.binary_rpms.iter().take(N) {
-        println!("{:?}", rpm);
-    }
-    println!();
-    for (build_id, source) in server.build_ids.iter().take(N) {
-        println!("{build_id} = {source:?}");
-    }
+    rocket::build()
+        .manage(server)
+        .mount("/", routes![index, debuginfo])
 }
