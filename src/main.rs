@@ -241,6 +241,17 @@ impl Server {
 
         None
     }
+
+    fn read_rpm_file(&self, rpm_file: &String, file: &String) -> Option<Vec<u8>> {
+        println!("  reading RPM file {rpm_file}");
+        if let Some((mut stream, _)) = self.get_rpm_file_stream(rpm_file, |f| f == file) {
+            let mut content = Vec::new();
+            let _ = stream.read_to_end(&mut content);
+            return Some(content);
+        } else {
+            None
+        }
+    }
 }
 
 #[get("/")]
@@ -253,17 +264,7 @@ fn debuginfo(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
     if let Some(source) = state.build_ids.get(&build_id) {
         let debug_info_rpm = &state.debug_info_rpms[source];
         if let RPMContent::DebugInfo { build_ids } = &debug_info_rpm.content {
-            let mut filename = &build_ids[&build_id];
-            println!("reading {filename}");
-            if let Some((mut stream, _)) =
-                state.get_rpm_file_stream(debug_info_rpm.path.as_str(), |f| f == &filename.clone())
-            {
-                let mut content = Vec::new();
-                let _ = stream.read_to_end(&mut content);
-                return Some(content);
-            } else {
-                println!("The file cannot be found in {}", debug_info_rpm.path);
-            }
+            return state.read_rpm_file(&debug_info_rpm.path, &build_ids[&build_id]);
         }
     }
 
@@ -275,18 +276,7 @@ fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Opti
     let source_path = format!("/{}", source_path.as_os_str().to_str().unwrap());
     if let Some(source) = state.build_ids.get(&build_id) {
         let source_info_rpm = &state.debug_source_rpms[source];
-        if let RPMContent::DebugSource = &source_info_rpm.content {
-            println!("reading {source_path}");
-            if let Some((mut stream, _)) =
-                state.get_rpm_file_stream(source_info_rpm.path.as_str(), |f| f == &source_path)
-            {
-                let mut content = Vec::new();
-                let _ = stream.read_to_end(&mut content);
-                return Some(content);
-            } else {
-                println!("The file cannot be found in {}", source_info_rpm.path);
-            }
-        }
+        return state.read_rpm_file(&source_info_rpm.path, &source_path);
     }
 
     None
