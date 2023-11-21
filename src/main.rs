@@ -17,7 +17,8 @@ use walkdir::WalkDir;
 extern crate rocket;
 use rocket::State;
 
-const DEBUG_INFO_PATH_PREFIX: &str = "/usr/lib/debug/.build-id/";
+const DEBUG_INFO_PATH: &str = "/usr/lib/debug";
+const DEBUG_INFO_BUILD_ID_PATH: &str = "/usr/lib/debug/.build-id/";
 const BUILD_ID_PREFIX: [u8; 8] = [0x03, 0x0, 0x0, 0x0, 0x47, 0x4e, 0x55, 0x0];
 
 #[derive(Debug)]
@@ -152,7 +153,7 @@ impl Server {
         for file_entry in header.get_file_entries().unwrap() {
             let path = file_entry.path;
             if is_debug_info_rpm {
-                if path.starts_with(DEBUG_INFO_PATH_PREFIX)
+                if path.starts_with(DEBUG_INFO_BUILD_ID_PATH)
                     && path.extension().is_some_and(|e| e == "debug")
                 {
                     let mut build_id = String::from(
@@ -298,6 +299,25 @@ fn debuginfo(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
     None
 }
 
+#[get("/buildid/<build_id>/executable")]
+fn executable(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
+    if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
+        if let Some(filename) = debug_info_rpm.build_id_to_path.get(&build_id) {
+            let filename = filename
+                .strip_suffix(".debug")
+                .unwrap()
+                .strip_prefix(DEBUG_INFO_PATH)
+                .unwrap()
+                .to_string();
+            if let Some(binary_rpm_path) = &debug_info_rpm.binary_rpm_path {
+                return state.read_rpm_file(&binary_rpm_path, &filename);
+            }
+        }
+    }
+
+    None
+}
+
 #[get("/buildid/<build_id>/source/<source_path..>")]
 fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Option<Vec<u8>> {
     if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
@@ -326,5 +346,5 @@ fn rocket() -> _ {
 
     rocket::build()
         .manage(server)
-        .mount("/", routes![index, debuginfo, source])
+        .mount("/", routes![index, debuginfo, executable, source])
 }
