@@ -1,24 +1,91 @@
-use core::time;
-use std::{collections::HashMap, fs, thread::sleep};
-
-use path_absolutize::*;
+use std::{collections::HashMap, hash::Hash};
 
 use rpm;
-use rpm::FileMode;
+
+use walkdir::WalkDir;
+
+use anyhow::Result;
+
+#[derive(Debug)]
+enum RPMContent {
+    Binary,
+    DebugInfo,
+    DebugSource,
+}
+
+#[derive(Debug)]
+struct RPMFile {
+    path: String,
+    content: RPMContent,
+}
+
+struct Server {
+    root_path: String,
+    binary_rpms: HashMap<String, RPMFile>,
+    debug_info_rpms: HashMap<String, RPMFile>,
+    debug_source_rpms: HashMap<String, RPMFile>,
+}
+
+impl Server {
+    fn new(root_folder: &str) -> Self {
+        Server {
+            root_path: String::from(root_folder),
+            binary_rpms: HashMap::new(),
+            debug_info_rpms: HashMap::new(),
+            debug_source_rpms: HashMap::new(),
+        }
+    }
+
+    fn walk(&mut self) {
+        for entry in WalkDir::new(self.root_path.clone()) {
+            let entry = entry.unwrap();
+            if entry.metadata().unwrap().is_file() {
+                let path = entry.path().to_str().unwrap();
+                if let Ok((source, rpm_file)) = self.analyze_file(path) {
+                    let map = match rpm_file.content {
+                        RPMContent::Binary => &mut self.binary_rpms,
+                        RPMContent::DebugInfo => &mut self.debug_info_rpms,
+                        RPMContent::DebugSource => &mut self.debug_source_rpms,
+                    };
+                    map.insert(source, rpm_file);
+                } else {
+                    todo!();
+                }
+            }
+        }
+    }
+
+    fn analyze_file(&self, path: &str) -> Result<(String, RPMFile)> {
+        let rpm_file = std::fs::File::open(path)?;
+        let mut buf_reader = std::io::BufReader::new(rpm_file);
+        // TODO: use ?
+        let header = rpm::RPMPackageMetadata::parse(&mut buf_reader)
+            .unwrap()
+            .header;
+
+        let name = header.get_name().unwrap();
+        let source = String::from(header.get_source_rpm().unwrap());
+        let path = String::from(path);
+
+        let content = if name.ends_with("-debuginfo") {
+            RPMContent::DebugInfo
+        } else if name.ends_with("-debugsource") {
+            RPMContent::DebugSource
+        } else {
+            RPMContent::Binary
+        };
+        Ok((source, RPMFile { path, content }))
+    }
+}
 
 fn main() {
-    let folder =
-        fs::read_dir("/home/marxin/Data/ftp.sh.cvut.cz/opensuse/tumbleweed/repo/oss/x86_64");
-    let folder2 =
-        fs::read_dir("/home/marxin/Data/ftp.gwdg.de/pub/opensuse/debug/tumbleweed/repo/oss/x86_64");
+    let mut server = Server::new("/home/marxin/Data");
+    server.walk();
+    println!("binaries: {}", server.binary_rpms.len());
+    println!("debuginfos: {}", server.debug_info_rpms.len());
+    println!("sources: {}", server.debug_source_rpms.len());
 
-    //let mut src_rpm_map = HashMap::new();
-    //let mut seen_paths = Vec::new();
-
-    let mut file_count = 0;
-    let mut i = 0;
-    let mut entries = Vec::new();
-
+    /*
     for entry in folder.unwrap() {
         entries.push(entry.unwrap());
     }
@@ -74,4 +141,5 @@ fn main() {
     println!("Total files in debug source: {file_count}");
     // println!("RPM dict size = {}", src_rpm_map.keys().len());
     // println!("{:?}", src_rpm_map);
+    */
 }
