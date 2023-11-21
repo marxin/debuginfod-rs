@@ -1,29 +1,39 @@
-use std::{collections::HashMap, hash::Hash};
-
-use rpm;
-
-use walkdir::WalkDir;
+use std::collections::HashMap;
 
 use anyhow::Result;
+use rayon::prelude::*;
+use rpm;
+use std::sync::mpsc::channel;
+use walkdir::WalkDir;
+
+const ARCH_MAPPING: [&str; 1] = ["x86_64"];
+const DEBUG_INFO_PATH_PREFIX: &str = "/usr/lib/debug/.build-id/";
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct RPMSourceKey {
+    arch: usize,
+    source_rpm: String,
+}
 
 #[derive(Debug)]
 enum RPMContent {
     Binary,
-    DebugInfo,
+    DebugInfo { build_ids: HashMap<String, String> },
     DebugSource,
 }
 
 #[derive(Debug)]
 struct RPMFile {
+    source: RPMSourceKey,
     path: String,
     content: RPMContent,
 }
 
 struct Server {
     root_path: String,
-    binary_rpms: HashMap<String, RPMFile>,
-    debug_info_rpms: HashMap<String, RPMFile>,
-    debug_source_rpms: HashMap<String, RPMFile>,
+    binary_rpms: HashMap<RPMSourceKey, RPMFile>,
+    debug_info_rpms: HashMap<RPMSourceKey, RPMFile>,
+    debug_source_rpms: HashMap<RPMSourceKey, RPMFile>,
 }
 
 impl Server {
@@ -37,44 +47,88 @@ impl Server {
     }
 
     fn walk(&mut self) {
+        let mut files = Vec::new();
         for entry in WalkDir::new(self.root_path.clone()) {
             let entry = entry.unwrap();
             if entry.metadata().unwrap().is_file() {
-                let path = entry.path().to_str().unwrap();
-                if let Ok((source, rpm_file)) = self.analyze_file(path) {
-                    let map = match rpm_file.content {
-                        RPMContent::Binary => &mut self.binary_rpms,
-                        RPMContent::DebugInfo => &mut self.debug_info_rpms,
-                        RPMContent::DebugSource => &mut self.debug_source_rpms,
-                    };
-                    map.insert(source, rpm_file);
-                } else {
-                    todo!();
-                }
+                files.push(String::from(entry.path().to_str().unwrap()));
+            }
+        }
+
+        let (rx, tx) = channel();
+
+        files.par_iter().for_each_with(rx, |rx, path| {
+            let _ = rx.send(self.analyze_file(path));
+        });
+
+        for item in tx.iter() {
+            if let Ok(rpm_file) = item {
+                let map = match rpm_file.content {
+                    RPMContent::Binary => &mut self.binary_rpms,
+                    RPMContent::DebugInfo { .. } => &mut self.debug_info_rpms,
+                    RPMContent::DebugSource => &mut self.debug_source_rpms,
+                };
+                map.insert(rpm_file.source.clone(), rpm_file);
+            } else {
+                todo!();
             }
         }
     }
 
-    fn analyze_file(&self, path: &str) -> Result<(String, RPMFile)> {
+    fn analyze_file(&self, path: &str) -> Result<RPMFile> {
         let rpm_file = std::fs::File::open(path)?;
         let mut buf_reader = std::io::BufReader::new(rpm_file);
         // TODO: use ?
-        let header = rpm::RPMPackageMetadata::parse(&mut buf_reader)
-            .unwrap()
-            .header;
+        let header = rpm::PackageMetadata::parse(&mut buf_reader).unwrap();
 
         let name = header.get_name().unwrap();
-        let source = String::from(header.get_source_rpm().unwrap());
+        let source_rpm = String::from(header.get_source_rpm().unwrap());
+        let arch = header.get_arch().unwrap();
+        let source = RPMSourceKey {
+            arch: ARCH_MAPPING.iter().position(|&item| item == arch).unwrap(),
+            source_rpm,
+        };
         let path = String::from(path);
 
-        let content = if name.ends_with("-debuginfo") {
-            RPMContent::DebugInfo
+        let is_debug_info_rpm = name.ends_with("-debuginfo");
+        let mut build_ids = HashMap::new();
+
+        // TODO: called `Result::unwrap()` on an `Err` value: TagNotFound("RPMTAG_FILEMODES")
+
+        if let Ok(entries) = header.get_file_entries() {
+            for file_entry in entries {
+                let path = String::from(file_entry.path.to_str().unwrap());
+                if is_debug_info_rpm {
+                    if path.starts_with(DEBUG_INFO_PATH_PREFIX) && path.ends_with(".debug") {
+                        let components: Vec<_> = file_entry
+                            .path
+                            .components()
+                            .rev()
+                            .take(2)
+                            .map(|path| path.as_os_str().to_str().unwrap())
+                            .collect();
+                        let first = components[1];
+                        let second = components[0].replace(".debug", "");
+                        let mut build_id = String::from(first);
+                        build_id.push_str(second.as_str());
+                        build_ids.insert(build_id, path.clone());
+                    }
+                }
+            }
+        }
+
+        let content = if is_debug_info_rpm {
+            RPMContent::DebugInfo { build_ids }
         } else if name.ends_with("-debugsource") {
             RPMContent::DebugSource
         } else {
             RPMContent::Binary
         };
-        Ok((source, RPMFile { path, content }))
+        Ok(RPMFile {
+            source,
+            path,
+            content,
+        })
     }
 }
 
@@ -85,61 +139,16 @@ fn main() {
     println!("debuginfos: {}", server.debug_info_rpms.len());
     println!("sources: {}", server.debug_source_rpms.len());
 
-    /*
-    for entry in folder.unwrap() {
-        entries.push(entry.unwrap());
+    const N: usize = 4;
+    for (_, rpm) in server.debug_info_rpms.iter().take(N) {
+        println!("{:?}", rpm);
     }
-
-    for entry in folder2.unwrap() {
-        entries.push(entry.unwrap());
+    println!();
+    for (_, rpm) in server.debug_source_rpms.iter().take(N) {
+        println!("{:?}", rpm);
     }
-
-    println!("Folders read: {}", entries.len());
-    entries.iter().for_each(|entry| {
-        let rpm_file = std::fs::File::open(entry.path()).unwrap();
-        let mut buf_reader = std::io::BufReader::new(rpm_file);
-        let metadata = rpm::RPMPackageMetadata::parse(&mut buf_reader).unwrap();
-        //src_rpm_map.entry(String::from(metadata.header.get_source_rpm().unwrap())).and_modify(|e| *e += 1).or_insert(1);
-        let srcpkg_id = metadata.header.get_source_pkgid();
-        metadata.header.get_source_rpm();
-        //if srcpkg_id.is_err() && !metadata.header.get_name().unwrap().ends_with("-debuginfo") {
-        //    println!("{:?} {:?}", metadata.header.get_name().unwrap(), srcpkg_id);
-        //}
-
-        let files = metadata.header.get_file_paths();
-        if let Err(err) = metadata.header.get_payload_compressor() {
-            //println!("error in {}: {:?}", metadata.header.get_name().unwrap(), err);
-        } else {
-            if let Ok(fff) = files {
-                if metadata
-                    .header
-                    .get_name()
-                    .unwrap()
-                    .ends_with("-debugsource")
-                {
-                    file_count += fff.len();
-                    if fff.len() > 10000 {
-                        println!("{entry:?} {}", fff.len());
-                    }
-                }
-                for fentry in metadata.header.get_file_entries().unwrap() {
-                    if let FileMode::Symlink {} = fentry.mode {
-                        //println!("{:?}", fentry);
-                        let combined = fentry.path.parent().unwrap().join(fentry.linkto.clone());
-                        let absolute = combined.absolutize();
-                        // println!("aaaa {:?} {:?}", fentry.path, fentry.linkto);
-                    }
-                }
-            }
-        }
-
-        //metadata.header.get_name();
-        // println!("{:?}", metadata.header.get_name());
-    });
-
-    println!("Total RPM files: {i}");
-    println!("Total files in debug source: {file_count}");
-    // println!("RPM dict size = {}", src_rpm_map.keys().len());
-    // println!("{:?}", src_rpm_map);
-    */
+    println!();
+    for (_, rpm) in server.binary_rpms.iter().take(N) {
+        println!("{:?}", rpm);
+    }
 }
