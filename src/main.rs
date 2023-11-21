@@ -8,7 +8,8 @@ use rocket::response::status::{self, NotFound};
 use rpm;
 use walkdir::WalkDir;
 
-#[macro_use] extern crate rocket;
+#[macro_use]
+extern crate rocket;
 use rocket::State;
 
 const ARCH_MAPPING: [&str; 1] = ["x86_64"];
@@ -114,10 +115,11 @@ impl Server {
 
         if let Ok(entries) = header.get_file_entries() {
             for file_entry in entries {
-                let path = String::from(file_entry.path.to_str().unwrap());
+                let path = file_entry.path;
                 if is_debug_info_rpm {
-                    if path.starts_with(DEBUG_INFO_PATH_PREFIX) && path.ends_with(".debug") {
-                        let path = file_entry.path;
+                    if path.starts_with(DEBUG_INFO_PATH_PREFIX)
+                        && path.extension().is_some_and(|e| e == ".debug")
+                    {
                         let mut build_id = String::from(
                             path.parent()
                                 .unwrap()
@@ -166,7 +168,6 @@ fn debuginfo(build_id: String, state: &State<Server>) -> Result<String, NotFound
         Err(NotFound("The provided build-id is not found."))
     }
 }
-
 
 #[launch]
 fn rocket() -> _ {
