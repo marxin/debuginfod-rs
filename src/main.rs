@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::mpsc::channel;
 
 use anyhow::Result;
@@ -36,6 +35,7 @@ struct Server {
     binary_rpms: HashMap<RPMSourceKey, RPMFile>,
     debug_info_rpms: HashMap<RPMSourceKey, RPMFile>,
     debug_source_rpms: HashMap<RPMSourceKey, RPMFile>,
+    build_ids: HashMap<String, RPMSourceKey>,
 }
 
 impl Server {
@@ -45,6 +45,7 @@ impl Server {
             binary_rpms: HashMap::new(),
             debug_info_rpms: HashMap::new(),
             debug_source_rpms: HashMap::new(),
+            build_ids: HashMap::new(),
         }
     }
 
@@ -73,6 +74,16 @@ impl Server {
                 map.insert(rpm_file.source.clone(), rpm_file);
             } else {
                 todo!();
+            }
+        }
+
+        // save all build-ids for the future look up
+        for (source_key, rpm) in &self.debug_info_rpms {
+            if let RPMContent::DebugInfo { build_ids } = &rpm.content {
+                for (build_id, _) in build_ids {
+                    // TODO: remove clonning
+                    self.build_ids.insert(build_id.clone(), source_key.clone());
+                }
             }
         }
     }
@@ -144,8 +155,9 @@ fn main() {
     println!("binaries: {}", server.binary_rpms.len());
     println!("debuginfos: {}", server.debug_info_rpms.len());
     println!("sources: {}", server.debug_source_rpms.len());
+    println!("build-ids: {}", server.build_ids.len());
 
-    const N: usize = 4;
+    const N: usize = 5;
     for (_, rpm) in server.debug_info_rpms.iter().take(N) {
         println!("{:?}", rpm);
     }
@@ -156,5 +168,9 @@ fn main() {
     println!();
     for (_, rpm) in server.binary_rpms.iter().take(N) {
         println!("{:?}", rpm);
+    }
+    println!();
+    for (build_id, source) in server.build_ids.iter().take(N) {
+        println!("{build_id} = {source:?}");
     }
 }
