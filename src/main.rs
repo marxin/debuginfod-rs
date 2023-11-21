@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use cpio::NewcReader;
 use env_logger::Env;
 use log::info;
@@ -61,7 +61,7 @@ struct Server {
 impl Server {
     fn new(root_folder: &str) -> Self {
         Server {
-            root_path: String::from(root_folder),
+            root_path: root_folder.to_string(),
             debug_info_rpms: Vec::new(),
             build_ids: HashMap::new(),
         }
@@ -140,21 +140,32 @@ impl Server {
     fn analyze_file(&self, path: &str) -> anyhow::Result<RPMFile> {
         let rpm_file = std::fs::File::open(path)?;
         let mut buf_reader = std::io::BufReader::new(rpm_file);
-        // TODO: use ?
-        let header = rpm::PackageMetadata::parse(&mut buf_reader).unwrap();
+        let header =
+            rpm::PackageMetadata::parse(&mut buf_reader).or(Err(anyhow!("RPM parsing failed")))?;
 
-        let name = header.get_name().unwrap();
+        let name = header
+            .get_name()
+            .or(Err(anyhow!("could not get header name")))?;
         let is_debug_info_rpm = name.ends_with("-debuginfo");
         let canonical_name = name.strip_suffix("-debuginfo").unwrap_or(name).to_string();
 
-        let source_rpm = String::from(header.get_source_rpm().unwrap());
-        let arch = header.get_arch().unwrap().to_string();
-        let path = String::from(path);
+        let source_rpm = header
+            .get_source_rpm()
+            .or(Err(anyhow!("source RPM info is missing")))?
+            .to_string();
+        let arch = header
+            .get_arch()
+            .or(Err(anyhow!("get RPM arch failed")))?
+            .to_string();
+        let path = path.to_string();
 
         let mut build_ids = HashMap::new();
 
         let mut contains_dwz = false;
-        for file_entry in header.get_file_entries().unwrap() {
+        for file_entry in header
+            .get_file_entries()
+            .or(Err(anyhow!("RPM could not get file entries")))?
+        {
             let path = file_entry.path;
             if is_debug_info_rpm {
                 if path.starts_with(DEBUG_INFO_BUILD_ID_PATH)
@@ -168,16 +179,29 @@ impl Server {
                         .to_str()
                         .context("filename should be valid")?
                         .to_string();
-                    build_id.push_str(path.file_stem().unwrap().to_str().unwrap());
+                    build_id.push_str(
+                        path.file_stem()
+                            .context("file stem expected")?
+                            .to_str()
+                            .context("valid path expected")?,
+                    );
 
-                    let target = path.parent().unwrap().join(file_entry.linkto.clone());
+                    let target = path
+                        .parent()
+                        .context("filename must have a parent")?
+                        .join(file_entry.linkto.clone());
                     build_ids.insert(
                         build_id,
-                        String::from(target.as_path().absolutize().unwrap().to_str().unwrap()),
+                        target
+                            .as_path()
+                            .absolutize()?
+                            .to_str()
+                            .context("symlink target path must be valid")?
+                            .to_string(),
                     );
                 } else if path
                     .parent()
-                    .is_some_and(|p| p.file_name().unwrap() == ".dwz")
+                    .is_some_and(|p| p.file_name().is_some_and(|n| n == ".dwz"))
                 {
                     contains_dwz = true;
                 }
