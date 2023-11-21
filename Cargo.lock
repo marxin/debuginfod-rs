@@ -1163,7 +1163,7 @@ dependencies = [
 [[package]]
 name = "rpm"
 version = "0.12.1"
-source = "git+https://github.com/rpm-rs/rpm.git#60d26da7c72720455ffe957c1a52ae5821d3f9e9"
+source = "git+https://github.com/marxin/rpm-rs.git?branch=symlink-targets#e1df3de057602f492b5eeaa59b608e1d83ca13f7"
 dependencies = [
  "bitflags 2.4.1",
  "capctl",

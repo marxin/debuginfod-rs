@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::mpsc::channel;
 
 use anyhow::Result;
+use path_absolutize::*;
 use rayon::prelude::*;
 use rpm;
-use std::sync::mpsc::channel;
 use walkdir::WalkDir;
 
 const ARCH_MAPPING: [&str; 1] = ["x86_64"];
@@ -100,18 +102,22 @@ impl Server {
                 let path = String::from(file_entry.path.to_str().unwrap());
                 if is_debug_info_rpm {
                     if path.starts_with(DEBUG_INFO_PATH_PREFIX) && path.ends_with(".debug") {
-                        let components: Vec<_> = file_entry
-                            .path
-                            .components()
-                            .rev()
-                            .take(2)
-                            .map(|path| path.as_os_str().to_str().unwrap())
-                            .collect();
-                        let first = components[1];
-                        let second = components[0].replace(".debug", "");
-                        let mut build_id = String::from(first);
-                        build_id.push_str(second.as_str());
-                        build_ids.insert(build_id, path.clone());
+                        let path = file_entry.path;
+                        let mut build_id = String::from(
+                            path.parent()
+                                .unwrap()
+                                .file_name()
+                                .unwrap()
+                                .to_str()
+                                .unwrap(),
+                        );
+                        build_id.push_str(path.file_stem().unwrap().to_str().unwrap());
+
+                        let target = path.parent().unwrap().join(file_entry.linkto.clone());
+                        build_ids.insert(
+                            build_id,
+                            String::from(target.as_path().absolutize().unwrap().to_str().unwrap()),
+                        );
                     }
                 }
             }
