@@ -9,7 +9,7 @@ edition = "2021"
 anyhow = "1.0.75"
 path-absolutize = "3.1.1"
 rayon = "1.8.0"
-rpm = { git = "https://github.com/marxin/rpm-rs.git", branch = "symlink-targets" }
+rpm = { git = "https://github.com/rpm-rs/rpm.git", branch = "master" }
 walkdir = "2.4.0"
 zstd = "0.13.0"
 cpio = "0.2.2"
