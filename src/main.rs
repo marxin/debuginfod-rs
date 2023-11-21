@@ -105,8 +105,8 @@ impl Server {
             }
         }
 
-        /* First iterate the source RPM filies and create a map we can later use for construction
-        of the DebugInfoRPM entires. */
+        // First iterate the source RPM filies and create a map we can later use for construction
+        // of the DebugInfoRPM entires.
         let mut source_rpm_map = HashMap::new();
         for rpm in &rpms {
             if let RPMKind::DebugSource = rpm.kind {
@@ -114,8 +114,8 @@ impl Server {
             }
         }
 
-        /* Second iterate the binary RPM files and also create a map. We need to include canonical
-        package name in the map. */
+        // Second iterate the binary RPM files and also create a map. We need to include canonical
+        // package name in the map.
         let mut binary_rpm_map = HashMap::new();
         for rpm in &rpms {
             if let RPMKind::Binary = rpm.kind {
@@ -123,7 +123,7 @@ impl Server {
             }
         }
 
-        /* Now we can construct DebugInfoRPM entries and find the corresponding Binary and DebugSource packages. */
+        // Now we can construct DebugInfoRPM entries and find the corresponding Binary and DebugSource packages.
         for rpm in &rpms {
             if let RPMKind::DebugInfo { build_ids } = &rpm.kind {
                 let debug_info = Arc::new(DebugInfoRPM {
@@ -136,14 +136,12 @@ impl Server {
                         .and_then(|r| Some(r.path.clone())),
                     build_id_to_path: build_ids.clone(),
                 });
-                self.debug_info_rpms.push(debug_info);
-            }
-        }
 
-        /* Construct the Server state build-id mapping to DebugInfoRPM entries. */
-        for rpm in &self.debug_info_rpms {
-            for build_id in rpm.build_id_to_path.keys() {
-                self.build_ids.insert(build_id.clone(), rpm.clone());
+                self.debug_info_rpms.push(debug_info.clone());
+                // Construct the Server state build-id mapping to DebugInfoRPM entries.
+                for build_id in debug_info.build_id_to_path.keys() {
+                    self.build_ids.insert(build_id.clone(), debug_info.clone());
+                }
             }
         }
     }
@@ -213,8 +211,8 @@ impl Server {
                                     .to_string(),
                             );
                         }
-                        Err(error) => {
-                            println!("{rpm_path} {path:?} {error}");
+                        Err(_error) => {
+                            // warn!("{rpm_path} {path:?} {_error}");
                         }
                     }
                 } else if path.starts_with(DWZ_DEBUG_INFO_PATH) {
@@ -223,6 +221,8 @@ impl Server {
             }
         }
 
+        // Right now, there is a missing symlink from a build-id to the .dwz files in the RPM container and
+        // so we need to parse it in the ELF file.
         if contains_dwz {
             if let Some((build_id, path)) = self.get_build_id_for_dwz(&rpm_path) {
                 build_ids.insert(build_id, path);
@@ -249,8 +249,8 @@ impl Server {
         &self,
         path: &str,
         file_selector: impl Fn(&String) -> bool,
-    ) -> Option<(NewcReader<impl Read>, String)> {
-        let rpm_file = std::fs::File::open(path).unwrap();
+    ) -> anyhow::Result<(NewcReader<impl Read>, String)> {
+        let rpm_file = std::fs::File::open(path).context("cannot open RPM file")?;
 
         let mut buf_reader = std::io::BufReader::new(rpm_file);
         // TODO: use ?
@@ -258,14 +258,13 @@ impl Server {
 
         let compressor = header.get_payload_compressor();
         if compressor.is_err() || compressor.ok().unwrap() != CompressionType::Zstd {
-            // TODO: fix
-            return None;
+            return Err(anyhow!("only ZSTD compression is supported right now"));
         }
 
-        let mut decoder = zstd::stream::Decoder::new(buf_reader).unwrap();
+        let mut decoder = zstd::stream::Decoder::new(buf_reader).context("ZSTD decoded failed")?;
 
         loop {
-            let archive = NewcReader::new(decoder).unwrap();
+            let archive = NewcReader::new(decoder).context("CPIO decoder failed")?;
             let entry = archive.entry();
             if entry.is_trailer() {
                 break;
@@ -278,13 +277,13 @@ impl Server {
 
             // TODO
             if file_selector(&name) && file_size > 0 {
-                return Some((archive, name.clone()));
+                return Ok((archive, name.clone()));
             } else {
                 decoder = archive.finish().unwrap();
             }
         }
 
-        None
+        Err(anyhow!("file not found in the archive"))
     }
 
     fn get_build_id_for_dwz(&self, file: &str) -> Option<(BuildId, String)> {
@@ -294,7 +293,7 @@ impl Server {
         //
         // See SHT_NOTE for a more detail specification. Our note contains "GNU\0" followed by the Build-Id.
 
-        if let Some((mut stream, name)) =
+        if let Ok((mut stream, name)) =
             self.get_rpm_file_stream(file, |name| name.starts_with(DWZ_DEBUG_INFO_PATH))
         {
             let mut data = vec![0; 256];
@@ -326,7 +325,7 @@ impl Server {
 
     fn read_rpm_file(&self, rpm_file: &String, file: &String) -> Option<Vec<u8>> {
         info!("reading RPM file {rpm_file}");
-        if let Some((mut stream, _)) = self.get_rpm_file_stream(rpm_file, |f| f == file) {
+        if let Ok((mut stream, _)) = self.get_rpm_file_stream(rpm_file, |f| f == file) {
             info!("found RPM file: {file}");
             let mut content = Vec::new();
             let _ = stream.read_to_end(&mut content);
