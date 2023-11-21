@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::mpsc::channel;
 
 use anyhow::Result;
+use cpio::NewcReader;
 use path_absolutize::*;
 use rayon::prelude::*;
+use rocket::figment::providers::Format;
 use rocket::response::status::NotFound;
 use rocket::time::Instant;
+use rocket::Response;
 use rpm;
 use rpm::CompressionType;
 use walkdir::WalkDir;
@@ -62,7 +66,9 @@ impl Server {
         let mut files = Vec::new();
         for entry in WalkDir::new(self.root_path.clone()) {
             let entry = entry.unwrap();
-            if entry.metadata().unwrap().is_file() && entry.path().extension().is_some_and(|e| e == "rpm") {
+            if entry.metadata().unwrap().is_file()
+                && entry.path().extension().is_some_and(|e| e == "rpm")
+            {
                 files.push(String::from(entry.path().to_str().unwrap()));
             }
         }
@@ -122,7 +128,7 @@ impl Server {
             let path = file_entry.path;
             if is_debug_info_rpm {
                 if path.starts_with(DEBUG_INFO_PATH_PREFIX)
-                    && path.extension().is_some_and(|e| e == ".debug")
+                    && path.extension().is_some_and(|e| e == "debug")
                 {
                     let mut build_id = String::from(
                         path.parent()
@@ -168,7 +174,11 @@ impl Server {
         })
     }
 
-    fn get_build_id_for_dwz(&self, path: &str) -> Option<(String, String)> {
+    fn get_rpm_file_stream(
+        &self,
+        path: &str,
+        file_selector: impl Fn(&String) -> bool,
+    ) -> Option<(NewcReader<impl Read>, String)> {
         let rpm_file = std::fs::File::open(path).unwrap();
 
         let mut buf_reader = std::io::BufReader::new(rpm_file);
@@ -184,39 +194,52 @@ impl Server {
         let mut decoder = zstd::stream::Decoder::new(buf_reader).unwrap();
 
         loop {
-            let mut archive = cpio::NewcReader::new(decoder).unwrap();
+            let archive = NewcReader::new(decoder).unwrap();
             let entry = archive.entry();
             if entry.is_trailer() {
                 break;
             }
-            let name = String::from(entry.name());
+            let mut name = String::from(entry.name());
+            if name.starts_with('.') {
+                name = String::from_iter(name.chars().skip(1));
+            }
             let file_size = entry.file_size() as usize;
 
-            if name.contains("usr/lib/debug/.dwz/") && file_size > 0 {
-                let mut data = vec![0; 256];
-                let _ = archive.read_exact(&mut data);
-                let mut heystack = &data[..];
-                // TODO: proper iteration space
-                for _ in 0..128 {
-                    if heystack.starts_with(&BUILD_ID_PREFIX) {
-                        let build_id: Vec<_> = heystack
-                            .iter()
-                            .skip(BUILD_ID_PREFIX.len())
-                            .take(20)
-                            .copied()
-                            .collect();
-                        return Some((hex::encode(build_id), name));
-                    } else {
-                        heystack = &heystack[1..];
-                    }
-                }
-                break;
+            // TODO
+            if file_selector(&name) && file_size > 0 {
+                return Some((archive, name.clone()));
             } else {
                 decoder = archive.finish().unwrap();
             }
         }
 
-        panic!()
+        None
+    }
+
+    fn get_build_id_for_dwz(&self, file: &str) -> Option<(String, String)> {
+        if let Some((mut stream, name)) =
+            self.get_rpm_file_stream(file, |name| name.contains("usr/lib/debug/.dwz/"))
+        {
+            let mut data = vec![0; 256];
+            let _ = stream.read_exact(&mut data);
+            let mut heystack = &data[..];
+            // TODO: proper iteration space
+            for _ in 0..128 {
+                if heystack.starts_with(&BUILD_ID_PREFIX) {
+                    let build_id: Vec<_> = heystack
+                        .iter()
+                        .skip(BUILD_ID_PREFIX.len())
+                        .take(20)
+                        .copied()
+                        .collect();
+                    return Some((hex::encode(build_id), name));
+                } else {
+                    heystack = &heystack[1..];
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -226,12 +249,47 @@ fn index() -> &'static str {
 }
 
 #[get("/buildid/<build_id>/debuginfo")]
-fn debuginfo(build_id: String, state: &State<Server>) -> Result<String, NotFound<&str>> {
-    if let Some(path) = state.build_ids.get(&build_id) {
-        Ok(state.debug_info_rpms[path].path.clone())
-    } else {
-        Err(NotFound("The provided build-id is not found."))
+fn debuginfo(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
+    if let Some(source) = state.build_ids.get(&build_id) {
+        let debug_info_rpm = &state.debug_info_rpms[source];
+        if let RPMContent::DebugInfo { build_ids } = &debug_info_rpm.content {
+            let mut filename = &build_ids[&build_id];
+            println!("reading {filename}");
+            if let Some((mut stream, _)) =
+                state.get_rpm_file_stream(debug_info_rpm.path.as_str(), |f| f == &filename.clone())
+            {
+                let mut content = Vec::new();
+                let _ = stream.read_to_end(&mut content);
+                return Some(content);
+            } else {
+                println!("The file cannot be found in {}", debug_info_rpm.path);
+            }
+        }
     }
+
+    None
+}
+
+#[get("/buildid/<build_id>/source/<source_path..>")]
+fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Option<Vec<u8>> {
+    let source_path = format!("/{}", source_path.as_os_str().to_str().unwrap());
+    if let Some(source) = state.build_ids.get(&build_id) {
+        let source_info_rpm = &state.debug_source_rpms[source];
+        if let RPMContent::DebugSource = &source_info_rpm.content {
+            println!("reading {source_path}");
+            if let Some((mut stream, _)) =
+                state.get_rpm_file_stream(source_info_rpm.path.as_str(), |f| f == &source_path)
+            {
+                let mut content = Vec::new();
+                let _ = stream.read_to_end(&mut content);
+                return Some(content);
+            } else {
+                println!("The file cannot be found in {}", source_info_rpm.path);
+            }
+        }
+    }
+
+    None
 }
 
 #[launch]
@@ -243,8 +301,9 @@ fn rocket() -> _ {
         "Parsing took: {} s",
         (Instant::now() - start).as_seconds_f32()
     );
+    println!("Registered {} build-ids", server.build_ids.len());
 
     rocket::build()
         .manage(server)
-        .mount("/", routes![index, debuginfo])
+        .mount("/", routes![index, debuginfo, source])
 }
