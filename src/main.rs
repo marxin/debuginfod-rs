@@ -15,7 +15,7 @@ use walkdir::WalkDir;
 extern crate rocket;
 use rocket::State;
 
-const ARCH_MAPPING: [&str; 1] = ["x86_64"];
+const ARCH_MAPPING: [&str; 2] = ["x86_64", "aarch64"];
 const DEBUG_INFO_PATH_PREFIX: &str = "/usr/lib/debug/.build-id/";
 const BUILD_ID_PREFIX: [u8; 8] = [0x03, 0x0, 0x0, 0x0, 0x47, 0x4e, 0x55, 0x0];
 
@@ -62,10 +62,12 @@ impl Server {
         let mut files = Vec::new();
         for entry in WalkDir::new(self.root_path.clone()) {
             let entry = entry.unwrap();
-            if entry.metadata().unwrap().is_file() {
+            if entry.metadata().unwrap().is_file() && entry.path().extension().is_some_and(|e| e == "rpm") {
                 files.push(String::from(entry.path().to_str().unwrap()));
             }
         }
+
+        println!("Indexing {} RPM files", files.len());
 
         let (rx, tx) = channel();
 
