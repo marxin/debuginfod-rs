@@ -296,20 +296,22 @@ impl Server {
             let mut data = vec![0; 256];
             let _ = stream.read_exact(&mut data);
             let mut heystack = data.as_slice();
-            // TODO: proper iteration space
-            for _ in 0..128 {
+            for _ in 0..(data.len() - BUILD_ID_ELF_PREFIX.len() - BUILD_CHARS) {
                 if heystack.starts_with(&BUILD_ID_ELF_PREFIX) {
                     let build_id: Vec<_> = heystack
                         .iter()
                         .skip(BUILD_ID_ELF_PREFIX.len())
-                        .take(20)
+                        .take(BUILD_CHARS)
                         .copied()
                         .collect();
                     let build_id = BuildId::try_from(build_id);
                     if let Ok(build_id) = build_id {
                         return Some((build_id, name));
+                    } else {
+                        break;
                     }
                 } else {
+                    // Shift the heystack by one byte and continue
                     heystack = &heystack[1..];
                 }
             }
