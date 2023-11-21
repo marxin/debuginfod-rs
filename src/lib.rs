@@ -5,6 +5,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use cpio::NewcReader;
+use elf::abi::SHT_NOBITS;
+use elf::endian::AnyEndian;
+use elf::ElfBytes;
 use log::{info, warn};
 use path_absolutize::*;
 use rayon::prelude::*;
@@ -316,6 +319,24 @@ impl Server {
         None
     }
 
+    pub fn get_binary_rpm_for_build_id(&self, build_id: BuildId) -> Option<(String, String)> {
+        if let Some(debug_info_rpm) = self.build_ids.get(&build_id) {
+            if let Some(filename) = debug_info_rpm.build_id_to_path.get(&build_id) {
+                let filename = filename
+                    .strip_suffix(".debug")
+                    .unwrap()
+                    .strip_prefix(DEBUG_INFO_PATH)
+                    .unwrap()
+                    .to_string();
+                if let Some(binary_rpm_path) = &debug_info_rpm.binary_rpm_path {
+                    return Some((binary_rpm_path.clone(), filename));
+                }
+            }
+        }
+
+        None
+    }
+
     pub fn read_rpm_file(&self, rpm_file: &String, file: &String) -> Option<Vec<u8>> {
         info!("reading RPM file {rpm_file}");
         if let Ok((mut stream, _)) = self.get_rpm_file_stream(rpm_file, |f| f == file) {
@@ -326,6 +347,34 @@ impl Server {
         } else {
             None
         }
+    }
+
+    pub fn read_rpm_file_section(
+        &self,
+        rpm_file: &String,
+        file: &String,
+        section: &String,
+    ) -> Option<Vec<u8>> {
+        if let Some(data) = self.read_rpm_file(rpm_file, file) {
+            if let Ok(elf_file) = ElfBytes::<AnyEndian>::minimal_parse(data.as_slice()) {
+                if let Ok(section) = elf_file.section_header_by_name(section) {
+                    if section.is_none() {
+                        return None;
+                    }
+                    let section = section.unwrap();
+                    if section.sh_type == SHT_NOBITS {
+                        return None;
+                    }
+
+                    if let Ok(section_data) = elf_file.section_data(&section) {
+                        let mut result = Vec::new();
+                        section_data.0.clone_into(&mut result);
+                        return Some(result);
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn parse_build_id(&self, id: &str) -> anyhow::Result<BuildId> {

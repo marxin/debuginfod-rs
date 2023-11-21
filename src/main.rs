@@ -34,16 +34,30 @@ fn debuginfo(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
 #[get("/buildid/<build_id>/executable")]
 fn executable(build_id: String, state: &State<Server>) -> Option<Vec<u8>> {
     if let Ok(build_id) = state.parse_build_id(&build_id) {
+        if let Some((binary_rpm_file, filename)) = state.get_binary_rpm_for_build_id(build_id) {
+            return state.read_rpm_file(&binary_rpm_file, &filename);
+        }
+    }
+
+    None
+}
+
+#[get("/buildid/<build_id>/section/<section_name>")]
+fn section(build_id: String, section_name: String, state: &State<Server>) -> Option<Vec<u8>> {
+    if let Ok(build_id) = state.parse_build_id(&build_id) {
         if let Some(debug_info_rpm) = state.build_ids.get(&build_id) {
-            if let Some(filename) = debug_info_rpm.build_id_to_path.get(&build_id) {
-                let filename = filename
-                    .strip_suffix(".debug")
-                    .unwrap()
-                    .strip_prefix(DEBUG_INFO_PATH)
-                    .unwrap()
-                    .to_string();
-                if let Some(binary_rpm_path) = &debug_info_rpm.binary_rpm_path {
-                    return state.read_rpm_file(&binary_rpm_path, &filename);
+            // First try to find the section in the debug info ELF binary.
+            if let Some(data) = state.read_rpm_file_section(
+                &debug_info_rpm.rpm_path,
+                &debug_info_rpm.build_id_to_path[&build_id],
+                &section_name,
+            ) {
+                return Some(data);
+            } else {
+                if let Some((binary_rpm_file, filename)) =
+                    state.get_binary_rpm_for_build_id(build_id)
+                {
+                    return state.read_rpm_file_section(&binary_rpm_file, &filename, &section_name);
                 }
             }
         }
@@ -92,5 +106,5 @@ fn rocket() -> _ {
 
     rocket::build()
         .manage(server)
-        .mount("/", routes![index, debuginfo, executable, source])
+        .mount("/", routes![index, debuginfo, executable, source, section])
 }
