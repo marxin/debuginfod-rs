@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
@@ -9,7 +8,6 @@ use anyhow::Result;
 use cpio::NewcReader;
 use path_absolutize::*;
 use rayon::prelude::*;
-use rocket::figment::providers::Format;
 use rocket::time::Instant;
 use rpm;
 use rpm::CompressionType;
@@ -19,7 +17,6 @@ use walkdir::WalkDir;
 extern crate rocket;
 use rocket::State;
 
-const ARCH_MAPPING: [&str; 2] = ["x86_64", "aarch64"];
 const DEBUG_INFO_PATH_PREFIX: &str = "/usr/lib/debug/.build-id/";
 const BUILD_ID_PREFIX: [u8; 8] = [0x03, 0x0, 0x0, 0x0, 0x47, 0x4e, 0x55, 0x0];
 
