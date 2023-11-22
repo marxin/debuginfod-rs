@@ -248,8 +248,7 @@ impl Server {
         let rpm_file = std::fs::File::open(path).context("cannot open RPM file")?;
 
         let mut buf_reader = std::io::BufReader::new(rpm_file);
-        // TODO: use ?
-        let header = rpm::PackageMetadata::parse(&mut buf_reader).unwrap();
+        let header = rpm::PackageMetadata::parse(&mut buf_reader).map_err(|_| anyhow!("could not parse RPM file"))?;
 
         let compressor = header.get_payload_compressor();
         if compressor.is_err() || compressor.ok().unwrap() != CompressionType::Zstd {
@@ -270,7 +269,6 @@ impl Server {
             }
             let file_size = entry.file_size() as usize;
 
-            // TODO
             if file_selector(&name) && file_size > 0 {
                 return Ok((archive, name.clone()));
             } else {
