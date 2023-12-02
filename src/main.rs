@@ -86,7 +86,7 @@ fn rocket() -> _ {
         .init();
 
     let start = Instant::now();
-    let mut server = Server::new("/home/marxin/Data");
+    let mut server = Server::new("/home/marxin/Downloads/RPM");
     server.walk();
 
     // trim heap allocation after we parse all the RPM files
