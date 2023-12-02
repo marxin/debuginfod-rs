@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use env_logger::Env;
 use log::info;
 extern crate log;
+use bytesize::{self, ByteSize};
 
 #[macro_use]
 extern crate rocket;
@@ -94,9 +95,12 @@ fn rocket() -> _ {
         libc::malloc_trim(0);
     }
 
+    let duration = (Instant::now() - start).as_seconds_f32();
+    let bytes_per_s = server.total_byte_size as f32 / duration;
     info!(
-        "parsing took: {:.2} s",
-        (Instant::now() - start).as_seconds_f32()
+        "parsing took: {:.2} s ({}/s)",
+        duration,
+        ByteSize(bytes_per_s.round() as u64)
     );
     info!("registered {} build-ids", server.build_ids.len());
     info!("DebugInfo RPM entries: {}", server.debug_info_rpms.len());

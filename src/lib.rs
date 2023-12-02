@@ -4,6 +4,7 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
+use bytesize::ByteSize;
 use cpio::NewcReader;
 use elf::abi::SHT_NOBITS;
 use elf::endian::AnyEndian;
@@ -55,6 +56,7 @@ pub struct Server {
     pub debug_info_rpms: Vec<Arc<DebugInfoRPM>>,
 
     pub build_ids: HashMap<BuildId, Arc<DebugInfoRPM>>,
+    pub total_byte_size: u64,
 }
 
 impl Server {
@@ -63,6 +65,7 @@ impl Server {
             root_path: root_folder.to_string(),
             debug_info_rpms: Vec::new(),
             build_ids: HashMap::new(),
+            total_byte_size: 0,
         }
     }
 
@@ -83,7 +86,15 @@ impl Server {
             }
         }
 
-        info!("walking {} RPM files", files.len());
+        self.total_byte_size = files
+            .iter()
+            .map(|f| std::fs::metadata(f).unwrap().len())
+            .sum();
+        info!(
+            "walking {} RPM files ({})",
+            files.len(),
+            ByteSize(self.total_byte_size)
+        );
 
         let (rx, tx) = channel();
 
@@ -248,7 +259,8 @@ impl Server {
         let rpm_file = std::fs::File::open(path).context("cannot open RPM file")?;
 
         let mut buf_reader = std::io::BufReader::new(rpm_file);
-        let header = rpm::PackageMetadata::parse(&mut buf_reader).map_err(|_| anyhow!("could not parse RPM file"))?;
+        let header = rpm::PackageMetadata::parse(&mut buf_reader)
+            .map_err(|_| anyhow!("could not parse RPM file"))?;
 
         let compressor = header.get_payload_compressor();
         if compressor.is_err() || compressor.ok().unwrap() != CompressionType::Zstd {
