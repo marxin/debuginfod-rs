@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use env_logger::Env;
 use log::info;
 extern crate log;
-use bytesize::{self, ByteSize};
+use bytesize::ByteSize;
 
 #[macro_use]
 extern crate rocket;
