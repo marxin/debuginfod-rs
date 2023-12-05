@@ -1954,8 +1954,7 @@ dependencies = [
 [[package]]
 name = "rpm"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c8c267b9e088b0fab889c0d8f7d2b351984c27aa6868a202cc40681b5585449"
+source = "git+https://github.com/rpm-rs/rpm.git#3e39b499a738a32ac9568eaea93510feb9cd6b8e"
 dependencies = [
  "bitflags 2.4.1",
  "capctl",

@@ -155,32 +155,20 @@ impl Server {
     fn analyze_file(&self, rpm_path: &str) -> anyhow::Result<RPMFile> {
         let rpm_file = std::fs::File::open(rpm_path)?;
         let mut buf_reader = std::io::BufReader::new(rpm_file);
-        let header =
-            rpm::PackageMetadata::parse(&mut buf_reader).or(Err(anyhow!("RPM parsing failed")))?;
+        let header = rpm::PackageMetadata::parse(&mut buf_reader)?;
 
-        let name = header
-            .get_name()
-            .or(Err(anyhow!("could not get header name")))?;
+        let name = header.get_name()?;
         let is_debug_info_rpm = name.ends_with("-debuginfo");
         let canonical_name = name.strip_suffix("-debuginfo").unwrap_or(name).to_string();
 
-        let source_rpm = header
-            .get_source_rpm()
-            .or(Err(anyhow!("source RPM info is missing")))?
-            .to_string();
-        let arch = header
-            .get_arch()
-            .or(Err(anyhow!("get RPM arch failed")))?
-            .to_string();
+        let source_rpm = header.get_source_rpm()?.to_string();
+        let arch = header.get_arch()?.to_string();
         let rpm_path = rpm_path.to_string();
 
         let mut build_ids = HashMap::new();
 
         let mut contains_dwz = false;
-        for file_entry in header
-            .get_file_entries()
-            .or(Err(anyhow!("RPM could not get file entries")))?
-        {
+        for file_entry in header.get_file_entries()? {
             let path = file_entry.path;
             if is_debug_info_rpm {
                 if path.starts_with(DEBUG_INFO_BUILD_ID_PATH)
@@ -259,9 +247,7 @@ impl Server {
         let rpm_file = std::fs::File::open(path).context("cannot open RPM file")?;
 
         let mut buf_reader = std::io::BufReader::new(rpm_file);
-        let header = rpm::PackageMetadata::parse(&mut buf_reader)
-            .map_err(|_| anyhow!("could not parse RPM file"))?;
-
+        let header = rpm::PackageMetadata::parse(&mut buf_reader)?;
         let compressor = header.get_payload_compressor();
         if compressor.is_err() || compressor.ok().unwrap() != CompressionType::Zstd {
             return Err(anyhow!("only ZSTD compression is supported right now"));
