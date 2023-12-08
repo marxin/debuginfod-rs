@@ -1,19 +1,22 @@
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use bytesize::ByteSize;
+use bzip2::bufread::BzDecoder;
 use cpio::NewcReader;
 use elf::abi::SHT_NOBITS;
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
+use flate2::read::GzDecoder;
 use log::{info, warn};
 use path_absolutize::*;
 use rayon::prelude::*;
 use rpm::CompressionType;
 use walkdir::WalkDir;
+use xz2::read::XzDecoder;
 
 extern crate log;
 
@@ -249,11 +252,15 @@ impl Server {
         let mut buf_reader = std::io::BufReader::new(rpm_file);
         let header = rpm::PackageMetadata::parse(&mut buf_reader)?;
         let compressor = header.get_payload_compressor();
-        if compressor.is_err() || compressor.ok().unwrap() != CompressionType::Zstd {
-            return Err(anyhow!("only ZSTD compression is supported right now"));
-        }
-
-        let mut decoder = zstd::stream::Decoder::new(buf_reader).context("ZSTD decoded failed")?;
+        let mut decoder: Box<dyn BufRead> = match compressor? {
+            CompressionType::Zstd => Box::new(BufReader::new(
+                zstd::stream::Decoder::new(buf_reader).context("ZSTD decoded failed")?,
+            )),
+            CompressionType::Gzip => Box::new(BufReader::new(GzDecoder::new(buf_reader))),
+            CompressionType::Bzip2 => Box::new(BufReader::new(BzDecoder::new(buf_reader))),
+            CompressionType::Xz => Box::new(BufReader::new(XzDecoder::new(buf_reader))),
+            CompressionType::None => Box::new(buf_reader),
+        };
 
         loop {
             let archive = NewcReader::new(decoder).context("CPIO decoder failed")?;
