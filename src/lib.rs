@@ -11,6 +11,7 @@ use elf::abi::SHT_NOBITS;
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use flate2::read::GzDecoder;
+use itertools::Itertools;
 use log::{info, warn};
 use path_absolutize::*;
 use rayon::prelude::*;
@@ -299,12 +300,12 @@ impl Server {
             let mut heystack = data.as_slice();
             for _ in 0..(data.len() - BUILD_ID_ELF_PREFIX.len() - BUILD_CHARS) {
                 if heystack.starts_with(&BUILD_ID_ELF_PREFIX) {
-                    let build_id: Vec<_> = heystack
+                    let build_id = heystack
                         .iter()
                         .skip(BUILD_ID_ELF_PREFIX.len())
                         .take(BUILD_CHARS)
                         .copied()
-                        .collect();
+                        .collect_vec();
                     let build_id = BuildId::try_from(build_id);
                     if let Ok(build_id) = build_id {
                         return Some((build_id, name));

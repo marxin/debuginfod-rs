@@ -519,6 +519,7 @@ dependencies = [
  "env_logger",
  "flate2",
  "hex",
+ "itertools",
  "libc",
  "log",
  "path-absolutize",
