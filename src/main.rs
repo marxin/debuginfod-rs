@@ -1,6 +1,9 @@
+use std::env::{self};
 use std::path::PathBuf;
+use std::process;
 
 use env_logger::Env;
+use itertools::Itertools;
 use log::info;
 extern crate log;
 use bytesize::ByteSize;
@@ -82,12 +85,18 @@ fn source(build_id: String, source_path: PathBuf, state: &State<Server>) -> Opti
 
 #[launch]
 fn rocket() -> _ {
+    let arguments = env::args().collect_vec();
+    if arguments.len() != 2 {
+        println!("Usage: debuginfod-rs folder");
+        process::exit(1);
+    }
+
     env_logger::Builder::from_env(Env::default().default_filter_or("info"))
         .format_timestamp(Some(env_logger::TimestampPrecision::Millis))
         .init();
 
     let start = Instant::now();
-    let mut server = Server::new("/home/marxin/Downloads/RPM");
+    let mut server = Server::new(arguments.get(1).unwrap());
     server.walk();
 
     // trim heap allocation after we parse all the RPM files
