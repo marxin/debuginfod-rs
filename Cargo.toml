@@ -3,7 +3,7 @@ name = "debuginfod-rs"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-desription = "An extremely fast debuginfod server, written in Rust."
+description = "An extremely fast debuginfod server, written in Rust."
 
 [profile.release]
 debug = true
