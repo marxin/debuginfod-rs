@@ -16,7 +16,7 @@ An extremely fast [debuginfod](https://sourceware.org/elfutils/Debuginfod.html) 
 
 ## Implementation details
 
-The indexer benefits from symlinks created by `rpmbuild`` which link each ELF executable (and shared library)
+The indexer benefits from symlinks created by `rpmbuild` which link each ELF executable (and shared library)
 and it's corresponding build-id path. Each web request first identifies an RPM file with a build-id and
 the corresponding ELF (or source) file is extracted on demand. Grouping of the `foo-debuginfo`, `foo-debugsource`
 and `foo` packages happens based on the source RPM file (present in the RPM file metadata).
@@ -31,6 +31,7 @@ on a modern AMD CPU (for the cached IO).
   is part of a build-id, but it's actually present in a different RPM package
   (e.g. header files of the devel sub-packages of a library)
 - missing disk cache
+- missing support for other containers like `.deb`
 
 ## Example usage
 
