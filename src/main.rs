@@ -1,6 +1,7 @@
 use std::env::{self};
 use std::path::PathBuf;
 use std::process;
+use std::time::Instant;
 
 use env_logger::Env;
 use itertools::Itertools;
@@ -10,7 +11,6 @@ use bytesize::ByteSize;
 
 #[macro_use]
 extern crate rocket;
-use rocket::time::Instant;
 use rocket::State;
 
 use debuginfod_rs::*;
@@ -104,7 +104,7 @@ fn rocket() -> _ {
         libc::malloc_trim(0);
     }
 
-    let duration = (Instant::now() - start).as_seconds_f32();
+    let duration = (Instant::now() - start).as_secs_f32();
     let bytes_per_s = server.total_byte_size as f32 / duration;
     info!(
         "parsing took: {:.2} s ({}/s)",
